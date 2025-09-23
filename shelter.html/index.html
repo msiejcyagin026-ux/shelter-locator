@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Shelter Locator — San Mateo, Isabela</title>
+
+  <!-- Leaflet & Routing -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.css"/>
+
+  <!-- PWA -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#0078d7">
+  <link rel="apple-touch-icon" href="icon-maskable-192.png">
+
+  <style>
+    html, body { height:100%; margin:0; font-family:Segoe UI, Roboto, Arial, sans-serif; }
+    #map { height:100%; }
+    #menuButton { position:absolute; bottom:20px; left:20px; width:55px; height:55px; border-radius:50%; background:#0078d7; color:#fff; font-size:24px; border:none; cursor:pointer; box-shadow:0 4px 10px rgba(0,0,0,.3); z-index:1500; }
+    #menuDrawer { position:absolute; bottom:90px; left:20px; background:#fff; border-radius:12px; box-shadow:0 4px 12px rgba(0,0,0,.2); width:250px; padding:15px; z-index:1500; transform:translateY(150%); opacity:0; transition:all .3s ease; }
+    #menuDrawer.show { transform:translateY(0); opacity:1; }
+    #menuDrawer button, #menuDrawer select { width:100%; margin-top:10px; padding:10px; border-radius:8px; border:1px solid #ccc; font-size:14px; cursor:pointer; }
+    #menuDrawer button { background:#0078d7; color:#fff; font-weight:600; }
+    #menuDrawer button:hover { background:#005fa3; }
+    #adminPanel { position:absolute; top:20px; right:20px; width:320px; background:#fff; border-radius:12px; box-shadow:0 8px 20px rgba(0,0,0,0.25); display:none; z-index:2000; padding:20px; }
+    #adminPanel input, #adminPanel button { width:100%; margin-top:10px; padding:8px; border-radius:6px; font-size:14px; }
+    #adminPanel button { border:none; cursor:pointer; font-weight:600; }
+    #adminLogin { background:#0078d7; color:#fff; }
+    #adminLogout { background:#ff4757; color:#fff; }
+    #saveShelter { background:#28a745; color:#fff; }
+    #clearShelters { background:#ffa502; color:#fff; }
+    #nearestButton { position:absolute; bottom:20px; right:20px; width:55px; height:55px; border-radius:50%; background:#28a745; color:#fff; font-size:20px; border:none; cursor:pointer; box-shadow:0 4px 10px rgba(0,0,0,.3); z-index:1500; }
+    #nearestButton:hover { background:#1e7e34; }
+    #cancelButton { position:absolute; bottom:90px; right:20px; width:55px; height:55px; border-radius:50%; background:#dc3545; color:#fff; font-size:22px; border:none; cursor:pointer; box-shadow:0 4px 10px rgba(0,0,0,.3); z-index:1500; }
+    #cancelButton:hover { background:#a71d2a; }
+    #installButton { position:absolute; bottom:160px; right:20px; width:55px; height:55px; border-radius:50%; background:#0078d7; color:#fff; font-size:18px; border:none; cursor:pointer; box-shadow:0 4px 10px rgba(0,0,0,.3); z-index:1500; display:none; }
+    #installButton:hover { background:#005fa3; }
+    .leaflet-routing-container.collapsed { height: 40px !important; overflow: hidden !important; }
+    .minimize-btn { position:absolute; top:5px; right:5px; background:#0078d7; color:#fff; border:none; border-radius:4px; padding:2px 6px; cursor:pointer; font-size:14px; z-index:2001; }
+    .minimize-btn:hover { background:#005fa3; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <button id="menuButton">☰</button>
+  <div id="menuDrawer">
+    <label>Shelters</label>
+    <select id="shelterSelect"><option value="">-- Select Shelter --</option></select>
+    <button id="downloadArea">⬇️ Download Route (Offline)</button>
+  </div>
+  <button id="nearestButton">🧭</button>
+  <button id="cancelButton">✖</button>
+  <button id="installButton">⬇️</button>
+  <div id="adminPanel">
+    <h3>🔑 Admin Panel</h3>
+    <div id="loginForm">
+      <input type="text" id="adminUser" placeholder="Username">
+      <input type="password" id="adminPass" placeholder="Password">
+      <button id="adminLogin">Login</button>
+    </div>
+    <div id="shelterForm" style="display:none;">
+      <input type="text" id="shelterName" placeholder="Shelter Name">
+      <input type="text" id="shelterLat" placeholder="Latitude">
+      <input type="text" id="shelterLng" placeholder="Longitude">
+      <input type="number" id="shelterCap" placeholder="Capacity">
+      <button id="saveShelter">Save Shelter</button>
+      <button id="clearShelters">Delete All</button>
+      <button id="adminLogout">Logout</button>
+    </div>
+  </div>
+
+  <!-- Leaflet -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.js"></script>
+
+  <!-- Firebase -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/12.3.0/firebase-app.js";
+    import { getFirestore, collection, getDocs, addDoc, doc, deleteDoc } from "https://www.gstatic.com/firebasejs/12.3.0/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyAw8Dx1jNLOQwPlNRIPWPI6scpD-DF8CkE",
+      authDomain: "shelter-locator-ee43c.firebaseapp.com",
+      projectId: "shelter-locator-ee43c",
+      storageBucket: "shelter-locator-ee43c.firebasestorage.app",
+      messagingSenderId: "662533102169",
+      appId: "1:662533102169:web:a6c621c1f5d368676a6f48",
+      measurementId: "G-MQY5TQ2GQG"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    const ADMIN_USER="admin", ADMIN_PASS="1234";
+    let isAdmin=false;
+    let shelters=[];
+    let userMarker, accuracyCircle, routingControl=null, routeLine=null;
+    let shelterMarkers=[];
+
+    // Default hardcoded shelters
+    const fallbackShelters=[
+      {name:"Evac Center 1", coords:[16.883,121.594], capacity:100},
+      {name:"Evac Center 2", coords:[16.887,121.597], capacity:80},
+      {name:"Barangay Hall", coords:[16.885,121.592], capacity:50}
+    ];
+
+    const map=L.map("map").setView([16.8827,121.5945],14);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19}).addTo(map);
+
+    function renderShelters(){
+      shelterMarkers.forEach(m=>map.removeLayer(m));
+      shelterMarkers=[];
+      const sel=document.getElementById("shelterSelect");
+      sel.innerHTML="<option value=''>-- Select Shelter --</option>";
+      shelters.forEach(s=>{
+        if (!s.coords) return;
+        let lat, lng;
+        if (Array.isArray(s.coords)) { lat=parseFloat(s.coords[0]); lng=parseFloat(s.coords[1]); }
+        else if (typeof s.coords==="object") { lat=parseFloat(s.coords[0]??s.coords.lat); lng=parseFloat(s.coords[1]??s.coords.lng); }
+        else if (typeof s.coords==="string") { const p=s.coords.split(","); lat=parseFloat(p[0]); lng=parseFloat(p[1]); }
+        if(isNaN(lat)||isNaN(lng)) return;
+        const marker=L.circleMarker([lat,lng],{radius:8,color:"red",fillOpacity:.8})
+          .addTo(map).bindPopup(`<b>${s.name}</b><br>Capacity: ${s.capacity||"N/A"}<br><button onclick="routeTo('${s.name}')">Route Here</button>`);
+        shelterMarkers.push(marker);
+        const opt=document.createElement("option"); opt.value=s.name; opt.textContent=s.name; sel.appendChild(opt);
+      });
+    }
+
+    async function loadShelters(){
+      shelters=[...fallbackShelters]; // start with defaults
+      try {
+        const snapshot=await getDocs(collection(db,"shelters"));
+        snapshot.forEach(doc=>{ shelters.push(doc.data()); });
+      } catch(e){ console.error("Firestore load error:",e); }
+      renderShelters();
+    }
+
+    window.routeTo=function(name){
+      const s=shelters.find(x=>x.name===name); if(!s||!userMarker) return alert("Shelter or location missing");
+      const [lat,lng]=Array.isArray(s.coords)?s.coords:[s.coords[0],s.coords[1]];
+      if(navigator.onLine){
+        if(routingControl) map.removeControl(routingControl);
+        routingControl=L.Routing.control({
+          waypoints:[userMarker.getLatLng(),L.latLng([lat,lng])],
+          addWaypoints:false,draggableWaypoints:false,
+          lineOptions:{styles:[{color:"blue",opacity:0.7,weight:5}]}
+        }).addTo(map);
+        routingControl.on("routeselected",()=>{
+          const panel=document.querySelector(".leaflet-routing-container");
+          if(panel&&!panel.querySelector(".minimize-btn")){
+            const btn=document.createElement("button"); btn.textContent="🗕"; btn.className="minimize-btn";
+            btn.onclick=()=>{ if(panel.classList.contains("collapsed")){ panel.classList.remove("collapsed"); btn.textContent="🗕"; } else { panel.classList.add("collapsed"); btn.textContent="🗖"; }};
+            panel.style.position="relative"; panel.appendChild(btn);
+          }
+          setTimeout(()=>{ if(panel&&!panel.classList.contains("collapsed")){ panel.classList.add("collapsed"); panel.querySelector(".minimize-btn").textContent="🗖"; } },1000);
+        });
+      } else {
+        if(routingControl){ map.removeControl(routingControl); routingControl=null; }
+        if(routeLine) map.removeLayer(routeLine);
+        routeLine=L.polyline([userMarker.getLatLng(),[lat,lng]],{color:"blue",dashArray:"5,5"}).addTo(map);
+      }
+    };
+
+    if(navigator.geolocation){
+      navigator.geolocation.watchPosition(pos=>{
+        const lat=pos.coords.latitude,lng=pos.coords.longitude;
+        map.setView([lat,lng],16);
+        if(userMarker){ userMarker.setLatLng([lat,lng]); }
+        else{ userMarker=L.marker([lat,lng],{icon:new L.Icon({iconUrl:"https://maps.gstatic.com/intl/en_us/mapfiles/markers2/measle_blue.png",iconSize:[12,12],iconAnchor:[6,6]})}).addTo(map).bindPopup("📍 You are here").openPopup(); }
+        if(accuracyCircle){ accuracyCircle.setLatLng([lat,lng]); accuracyCircle.setRadius(pos.coords.accuracy); }
+        else{ accuracyCircle=L.circle([lat,lng],{radius:pos.coords.accuracy,color:"blue",fillOpacity:.1}).addTo(map); }
+      });
+    }
+
+    document.getElementById("menuButton").onclick=()=>document.getElementById("menuDrawer").classList.toggle("show");
+    document.getElementById("shelterSelect").onchange=function(){ if(this.value) routeTo(this.value); };
+
+    document.getElementById("downloadArea").onclick=async()=>{
+      if(!userMarker) return alert("📍 No user location yet");
+      const shelterName=document.getElementById("shelterSelect").value;
+      if(!shelterName) return alert("⚠️ Please select a shelter first!");
+      const s=shelters.find(x=>x.name===shelterName);
+      try{
+        const url=`https://router.project-osrm.org/route/v1/driving/${userMarker.getLatLng().lng},${userMarker.getLatLng().lat};${s.coords[1]},${s.coords[0]}?overview=full&geometries=geojson`;
+        const res=await fetch(url); const data=await res.json();
+        if(data.routes&&data.routes.length>0){
+          const routeCoords=data.routes[0].geometry.coordinates.map(c=>[c[1],c[0]]);
+          localStorage.setItem("offlineRoute",JSON.stringify({shelter:s.name,coords:routeCoords}));
+          alert(`✅ Route to ${s.name} saved for offline use!`);
+        }
+      }catch(e){console.error(e);}
+    };
+
+    if(!navigator.onLine){
+      const saved=localStorage.getItem("offlineRoute");
+      if(saved){ const route=JSON.parse(saved); routeLine=L.polyline(route.coords,{color:"blue",weight:5,dashArray:"5,5"}).addTo(map).bindPopup(`📍 Offline route to ${route.shelter}`); map.fitBounds(routeLine.getBounds()); }
+    }
+
+    // ✅ Cancel route button
+    document.getElementById("cancelButton").onclick = () => {
+      if (routingControl) { map.removeControl(routingControl); routingControl = null; }
+      if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
+      alert("❌ Route cancelled. You can now choose another shelter.");
+    };
+
+    // ✅ Navigate to nearest shelter
+    document.getElementById("nearestButton").onclick = async () => {
+      if (!userMarker) return alert("📍 User location not found yet");
+      const userPos = userMarker.getLatLng();
+      let nearest = null, minDist = Infinity;
+
+      async function getRouteDistance(start, end) {
+        const url = `https://router.project-osrm.org/route/v1/driving/${start.lng},${start.lat};${end[1]},${end[0]}?overview=false`;
+        try {
+          const res = await fetch(url);
+          const data = await res.json();
+          if (data.routes && data.routes.length > 0) {
+            return data.routes[0].distance;
+          }
+        } catch (err) { console.error("OSRM error:", err); }
+        return Infinity;
+      }
+
+      for (let s of shelters) {
+        const d = await getRouteDistance(userPos, s.coords);
+        if (d < minDist) { minDist = d; nearest = s; }
+      }
+
+      if (nearest) {
+        alert(`🧭 Nearest shelter: ${nearest.name} (${(minDist/1000).toFixed(2)} km by road)`);
+        routeTo(nearest.name);
+      } else alert("⚠️ No shelters available");
+    };
+
+    document.addEventListener("keydown",e=>{ if(e.ctrlKey&&e.shiftKey&&e.code==="KeyA"){ const p=document.getElementById("adminPanel"); p.style.display=(p.style.display==="none"||p.style.display==="")?"block":"none"; }});
+    document.getElementById("adminLogin").onclick=()=>{ const u=document.getElementById("adminUser").value,p=document.getElementById("adminPass").value; if(u===ADMIN_USER&&p===ADMIN_PASS){ isAdmin=true; document.getElementById("loginForm").style.display="none"; document.getElementById("shelterForm").style.display="block"; } else alert("❌ Invalid login"); };
+    document.getElementById("adminLogout").onclick=()=>{ isAdmin=false; document.getElementById("loginForm").style.display="block"; document.getElementById("shelterForm").style.display="none"; };
+    document.getElementById("saveShelter").onclick=async()=>{ if(!isAdmin) return; const name=document.getElementById("shelterName").value.trim(); const lat=parseFloat(document.getElementById("shelterLat").value); const lng=parseFloat(document.getElementById("shelterLng").value); const cap=parseInt(document.getElementById("shelterCap").value)||0; if(!name||isNaN(lat)||isNaN(lng)) return alert("Fill all fields"); try{ await addDoc(collection(db,"shelters"),{name,coords:[lat,lng],capacity:cap}); shelters.push({name,coords:[lat,lng],capacity:cap}); renderShelters(); }catch(e){console.error("Save error:",e);} };
+    document.getElementById("clearShelters").onclick=async()=>{ if(isAdmin&&confirm("Delete all shelters?")){ try{ const snapshot=await getDocs(collection(db,"shelters")); for(const d of snapshot.docs){ await deleteDoc(doc(db,"shelters",d.id)); } shelters=[]; renderShelters(); }catch(e){console.error("Delete error:",e);} } };
+
+    loadShelters();
+  </script>
+
+  <script>
+    if("serviceWorker" in navigator){
+      navigator.serviceWorker.register("service-worker.js").then(()=>console.log("✅ SW registered")).catch(err=>console.error("❌ SW failed:",err));
+    }
+  </script>
+</body>
+</html>
