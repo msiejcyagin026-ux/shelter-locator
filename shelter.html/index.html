@@ -12,7 +12,11 @@
   <!-- PWA -->
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#0078d7">
-  <link rel="apple-touch-icon" href="icon-maskable-192.png">
+  
+  <!-- iOS support -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="icon-maskable-192.png">
 
   <style>
     html, body {
@@ -519,15 +523,34 @@ function loadSheltersRealtime() {
       shelters.push({ id: d.id, ...d.data() });
     });
 
-    // 🟡 NEW: Notify users when a shelter changes status
-    snapshot.docChanges().forEach((change) => {
-      if (change.type === "modified") {
-        const s = change.doc.data();
-        if (s.status && (s.status.toLowerCase() === "closed" || s.status.toLowerCase() === "full")) {
-          alert(`🚨 Shelter "${s.name}" has been ${s.status.toLowerCase()} by admin.`);
-        }
+// 🟡 Notify only the user currently navigating the affected shelter
+snapshot.docChanges().forEach((change) => {
+  if (change.type === "modified") {
+    const s = change.doc.data();
+    // Check if this is the shelter the user is currently navigating
+    if (currentRouteId && change.doc.id === currentRouteId) {
+      const status = s.status?.toLowerCase();
+      const used = s.capacityUsed || 0;
+      const total = s.capacityTotal || s.capacity || 0;
+      const isFull = total > 0 && used >= total;
+
+      if (status === "closed" || isFull) {
+        alert(`🚨 The shelter "${s.name}" you are navigating to is now ${status === "closed" ? "closed" : "full"}!`);
+        
+        // Stop current navigation
+        if (routeLine) map.removeLayer(routeLine);
+        routeLine = null;
+        currentRouteId = null;
+        currentRouteName = null;
+        document.getElementById("cancelButton").style.display = "none";
+
+        // Optional: auto-route to nearest open shelter
+        const userPos = userMarker.getLatLng();
+        routeToNearestOpenShelter(userPos.lat, userPos.lng);
       }
-    });
+    }
+  }
+});
 
     renderShelters();
     updateDeleteSelect();
@@ -883,6 +906,7 @@ document.getElementById("navigateButton").onclick = () => {
 showCancelButton();
  
       // center on shelter briefly
+      followUser = false;
       map.setView([lat,lng], 16);
     };
 
@@ -945,14 +969,59 @@ document.getElementById("nearestButton").onclick = async () => {
 };
 
 
-// My Location button: center map on user
+
+
+
+
+
+
+
+// 📍 My Location button with auto-follow
+
+
+let followUser = false; // start with free movement
+
 document.getElementById("myLocationButton").onclick = () => {
   if (!userMarker) return alert("📍 Your location is not available yet");
-
+  followUser = true; // enable follow when button clicked
   const userPos = userMarker.getLatLng();
   map.setView(userPos, 16); // zoom to user
   userMarker.openPopup();
 };
+
+// Disable auto-follow when user manually drags the map
+map.on('dragstart', () => {
+  followUser = false; // user is controlling map, stop auto-follow
+});
+
+
+
+
+
+
+
+// ZORO
+navigator.geolocation.watchPosition((pos) => {
+  const latlng = [pos.coords.latitude, pos.coords.longitude];
+  userMarker.setLatLng(latlng);
+  
+  if (followUser) map.setView(latlng, 16);
+
+  if (currentRouteId && routeLine) {
+    const s = shelters.find(x => x.id === currentRouteId);
+    let destLat, destLng;
+    if (Array.isArray(s.coords)) {
+      destLat = parseFloat(s.coords[0]);
+      destLng = parseFloat(s.coords[1]);
+    } else if (typeof s.coords === "object") {
+      destLat = parseFloat(s.coords.lat);
+      destLng = parseFloat(s.coords.lng);
+    }
+    // redraw straight line from current user location
+    routeLine.setLatLngs([latlng, [destLat, destLng]]);
+  }
+});
+
 
 
 
@@ -1288,17 +1357,27 @@ alert(`✅ Offline route "${file.name}" loaded!`);
       reader.readAsText(file);
     };
 
-    // PWA install
-    let deferredPrompt;
-    window.addEventListener("beforeinstallprompt", e=>{
-      e.preventDefault();
-      deferredPrompt = e;
-      document.getElementById("installButton").style.display = "block";
-    });
-    document.getElementById("installButton").onclick = ()=>{
-      deferredPrompt.prompt();
-      deferredPrompt.userChoice.then(()=>{ document.getElementById("installButton").style.display = "none"; });
-    };
+  let deferredPrompt;
+
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault(); // Prevent automatic mini-prompt
+  deferredPrompt = e; // Save event for later
+  const btn = document.getElementById("installButton");
+  if (btn) btn.style.display = "block"; // Show button
+});
+
+const installBtn = document.getElementById("installButton");
+if (installBtn) {
+  installBtn.addEventListener("click", async () => {
+    if (!deferredPrompt) return; // Safety check
+    deferredPrompt.prompt(); // Show install prompt
+    const choice = await deferredPrompt.userChoice; // Wait for user decision
+    console.log("User choice:", choice.outcome); // "accepted" or "dismissed"
+    deferredPrompt = null; // Reset
+    installBtn.style.display = "none"; // Hide button
+  });
+}
+
 
     // --- helper for delete select
 function updateDeleteSelect() {
@@ -1341,11 +1420,31 @@ document.getElementById("toggleLegendBtn").addEventListener("click", () => {
 loadSheltersRealtime();
 
 
-// ✅ Service Worker registration
+// ✅ Service Worker registration with update handling
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js')
-      .then(() => console.log("Service worker registered"))
+    navigator.serviceWorker.register('/service-worker.js')
+      .then(registration => {
+        console.log("Service worker registered:", registration);
+
+        // Listen for updates to the service worker
+        registration.onupdatefound = () => {
+          const newWorker = registration.installing;
+          newWorker.onstatechange = () => {
+            if (newWorker.state === 'installed') {
+              if (navigator.serviceWorker.controller) {
+                // New update available
+                console.log("New content available, please refresh.");
+                // Optional: prompt user to refresh
+                alert("New version available! Please refresh the app.");
+              } else {
+                // First install
+                console.log("Content cached for offline use.");
+              }
+            }
+          };
+        };
+      })
       .catch(err => console.error("SW registration failed:", err));
   });
 }
